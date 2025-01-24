@@ -5,3 +5,4 @@ matplotlib==3.8.3
 ipykernel==6.29.3
 catboost==1.2.3
 boto3==1.34.51
+seaborn==0.13.2
