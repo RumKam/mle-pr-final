@@ -7,6 +7,9 @@ __pycache__/
 *.so
 *.csv
 *.pkl
+*.parquet
+*.pkl\
+\catboost_info
 
 # Distribution / packaging
 .Python
@@ -171,3 +174,8 @@ old/
 # data
 *.csv
 *.cache
+
+!test_service.log
+!top_popular.parquet
+!recommendations.parquet
+!similar_items.parquet
