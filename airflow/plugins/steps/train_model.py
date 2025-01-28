@@ -1,8 +1,5 @@
 import pandas as pd
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 import numpy as np
-import sqlalchemy
-from sqlalchemy import MetaData, Table, Column, String, Integer, DateTime, Float, inspect, UniqueConstraint
 
 def create_table(**kwargs):
     
