@@ -128,6 +128,7 @@ celerybeat.pid
 
 # Environments
 .venv_pr_final
+.venv_pr_final_new
 .env
 .venv
 env/
@@ -135,6 +136,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+*.env
 
 # Spyder project settings
 .spyderproject
@@ -174,8 +176,13 @@ old/
 # data
 *.csv
 *.cache
+*.ipynb_checkpoints
+*.ipynb
+.ipynb
+main_research.ipynb
 
-!test_service.log
+#!test_service.log
 !top_popular.parquet
 !recommendations.parquet
 !similar_items.parquet
+!cb_model.pkl

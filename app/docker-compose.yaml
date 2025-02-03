@@ -1,0 +1,48 @@
+services:
+  events_service:
+    env_file:
+      - ./.env
+    build:
+      context: ./events_service
+      dockerfile: Dockerfile
+    # Я попыталась в докерфайлах для каждого сервиса примортировать образ с папкой recommendations, 
+    # но у меня так и не получилось понять, по какому пути вызывать из этого образа файлы для каждого сервиса :(
+    volumes:
+      - ./recommendations:/app/recommendations
+    ports:
+      - 8020:8020
+    hostname: events_service
+
+  features_service:
+    env_file:
+      - ./.env
+    build:
+      context: ./features_service
+      dockerfile: Dockerfile
+    volumes:
+      - ./recommendations:/app/recommendations
+    ports:
+      - 8010:8010
+    hostname: features_service
+
+  recsys_service:
+    env_file:
+      - ./.env
+    build:
+      context: ./recsys_service
+      dockerfile: Dockerfile
+    volumes:
+      - ./recommendations:/app/recommendations
+    ports:
+      - 8000:8000
+    hostname: recsys_service
+
+  prometheus:
+    image: prom/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    ports:
+      - 9090:9090
+    volumes:
+      - "./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml"
+    hostname: prometheus
