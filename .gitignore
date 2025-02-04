@@ -180,9 +180,10 @@ old/
 *.ipynb
 .ipynb
 main_research.ipynb
+notebooks/main_research.ipynb
 
 !test_service.log
 !top_popular.parquet
-!recommendations.parquet
-!similar_items.parquet
+!recommendations_test.parquet
+!similar_items_test.parquet
 !cb_model.pkl
