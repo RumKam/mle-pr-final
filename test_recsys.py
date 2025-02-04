@@ -1,12 +1,18 @@
 import requests
 import time
 import random
+import logging
+
+# Настройка логирования
+logging.basicConfig(filename='../test_service.log', level=logging.INFO,
+                    format='%(asctime)s:%(levelname)s:%(message)s')
 
 url_init = "http://172.20.0.1:8000/recommendations"
 
-users_list = [1001, 895999, 1002, 1003, 173863,
-              198270, 79627, 994820, 198270,
-              1109474]
+users_list = [1001, 1002, 1003,         # Пользователи без истории
+              173863, 198270, 994820]   # Пользователи с историей
+
+logging.info(f"Сервис работает")
 
 for i in users_list:
     # Получим 5 рекомендаций товаров
@@ -22,9 +28,9 @@ for i in users_list:
         # Проверка успешности запроса
         if response.status_code == 200:
             prediction = response.json()
-            print(f"User ID: {i}, Prediction: {prediction}")
+            logging.info(f"User ID: {i}, Prediction: {prediction}")
         else:
-            print(f"Request failed with status code: {response.status_code}")
+            logging.info(f"Request failed with status code: {response.status_code}")
 
     except requests.exceptions.RequestException as e:
-        print(f"An error occurred: {e}")
+        logging.info(f"An error occurred: {e}")

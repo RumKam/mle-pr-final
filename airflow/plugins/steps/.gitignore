@@ -181,7 +181,7 @@ old/
 .ipynb
 main_research.ipynb
 
-!test_service.log
+#!test_service.log
 !top_popular.parquet
 !recommendations.parquet
 !similar_items.parquet

@@ -1,4 +1,3 @@
-import logging as logger
 import pandas as pd
 import logging
 import requests
@@ -8,7 +7,6 @@ from config import config
 from prometheus_fastapi_instrumentator import Instrumentator
 from prometheus_client import Histogram
 import time
-
 
 # Настройка логирования
 logging.basicConfig(filename='../test_service.log', level=logging.INFO,
