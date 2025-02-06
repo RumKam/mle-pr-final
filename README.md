@@ -230,6 +230,6 @@ python test_recsys.py
 
 Адреса сервисов:
 - [Приложение](http://172.20.0.1:8000)
-- [Prometheus](http://172.20.0.1:9090)
+- [Prometheus](http://localhost:9090)
 - [Mlflow](http://172.20.0.1:8000)
-- [Airflow](http://172.20.0.1:8080)
+- [Airflow](http://localhost:8080)

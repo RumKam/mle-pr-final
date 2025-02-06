@@ -9,11 +9,59 @@ import os
 from io import BytesIO
 import io
 import pyarrow.parquet as pq
+import configparser
 
-PATH = '/home/mle-user/mle_projects/mle-pr-final/services/data/'
-PATH_RECS = '/home/mle-user/mle_projects/mle-pr-final/services/recsys/recommendations/'
-PATH_MODEL = '/home/mle-user/mle_projects/mle-pr-final/services/models/'
-BACKET_NAME = 's3-student-mle-20240921-750d983cc8'
+# Создаем объект ConfigParser
+config = configparser.ConfigParser()
+
+# Читаем конфигурационный файл
+config.read('config.ini')
+
+# Получаем значения параметров
+path_data = config['PATHS']['PATH']
+path_recs = config['PATHS']['PATH_RECS']
+path_model = config['PATHS']['PATH_MODEL']
+
+bucket_name = config['S3']['BUCKET_NAME']
+
+query_category = config['QUERIES']['CATEGORY']
+query_events = config['QUERIES']['EVENTS']
+query_items = config['QUERIES']['ITEMS']
+
+selected_columns = config['COLUMNS']['selected_columns'].split(',')
+features = config['FEATURES']['features'].split(',')
+cat_features = config['FEATURES']['cat_features'].split(',')
+
+def upload_parquet_to_s3(df, file_name, path_data, bucket_name, s3_hook):
+    """
+    Upload parquet dataframe to S3
+    """
+    # Сохраняем DataFrame в Parquet
+    parquet_file = f'{file_name}_tmp.parquet'
+    df.to_parquet(parquet_file, index=False)
+    
+    # Загружаем файл в S3
+    s3_key = f'{path_data}{parquet_file}'
+    s3_hook.load_file(
+        filename=parquet_file,
+        key=s3_key,
+        bucket_name=bucket_name,
+        replace=True
+    )
+
+def load_parquet_from_s3(s3_client, bucket_name, key):
+    """
+    Load parquet from S3 and write to pandas DataFrame.
+    """
+    # Получаем объект из S3
+    response = s3_client.get_object(Bucket=bucket_name, Key=key)
+    
+    # Читаем содержимое объекта
+    parquet_file = BytesIO(response['Body'].read())
+    
+    # Загружаем Parquet-файл в DataFrame
+    table = pq.read_table(parquet_file)
+    return table.to_pandas()
 
 def extract(**kwargs):
 
@@ -25,53 +73,18 @@ def extract(**kwargs):
     engine = hook.get_sqlalchemy_engine()
     source_conn = engine.connect()
 
-    QUERIES = {"CATEGORY" : '''
-            SELECT *
-            FROM category_tree AS category_tree
-        ''',
-
-           "EVENTS" : '''
-        SELECT timestamp,
-        visitorid, 
-        event, 
-        itemid, 
-        COALESCE(transactionid, 0) AS transactionid
-        FROM events AS events
-        ''',
-
-        "ITEMS": '''
-        SELECT *
-        FROM items AS items
-        '''
-          }
-
-    category_tree = pd.read_sql(QUERIES["CATEGORY"], source_conn)
-    events = pd.read_sql(QUERIES["EVENTS"], source_conn)
-    items = pd.read_sql(QUERIES["ITEMS"], source_conn)
+    category_tree = pd.read_sql(query_category, source_conn)
+    events = pd.read_sql(query_events, source_conn)
+    items = pd.read_sql(query_items, source_conn)
 
     source_conn.close()
 
     # Промежуточные файлы имеют много строк, поэтому загрузим в хранилище без создания таблиц в бд
     s3_hook = S3Hook(aws_conn_id='s3_aws_connection')
-
-    category_tree.to_parquet('category_tree_tmp.parquet', index=False)
-    events.to_parquet('events_tmp.parquet', index=False)
-    items.to_parquet('items_tmp.parquet', index=False)
-
-    s3_hook.load_file('category_tree_tmp.parquet', 
-                      key=f'{PATH}category_tree_tmp.parquet',
-                       bucket_name=BACKET_NAME, 
-                       replace=True)
     
-    s3_hook.load_file('events_tmp.parquet', 
-                      key=f'{PATH}events_tmp.parquet',
-                       bucket_name=BACKET_NAME, 
-                       replace=True)
-    
-    s3_hook.load_file('items_tmp.parquet', 
-                      key=f'{PATH}items_tmp.parquet',
-                       bucket_name=BACKET_NAME, 
-                       replace=True)
+    upload_parquet_to_s3(category_tree, 'category_tree', path_data, bucket_name, s3_hook)
+    upload_parquet_to_s3(events, 'events', path_data, bucket_name, s3_hook)
+    upload_parquet_to_s3(items, 'items', path_data, bucket_name, s3_hook)
 
 
 def transform(**kwargs):
@@ -80,49 +93,39 @@ def transform(**kwargs):
     """
 
     s3_hook = S3Hook(aws_conn_id='s3_aws_connection')
-
     s3_client = s3_hook.get_conn()
 
-    response_category_tree = s3_client.get_object(Bucket=BACKET_NAME, 
-                                    Key=f'{PATH}category_tree_tmp.parquet')
-    # Читаем содержимое объекта
-    parquet_file_category_tree = BytesIO(response_category_tree['Body'].read())
-    # Загружаем Parquet файл в DataFrame
-    table_1 = pq.read_table(parquet_file_category_tree)
-    category_tree = table_1.to_pandas()
-
-    response_events = s3_client.get_object(Bucket=BACKET_NAME, 
-                                    Key=f'{PATH}events_tmp.parquet')
-    parquet_file_events = BytesIO(response_events['Body'].read())
-    table_2 = pq.read_table(parquet_file_events)
-    events = table_2.to_pandas()
-
-    response_items = s3_client.get_object(Bucket=BACKET_NAME, 
-                                    Key=f'{PATH}items_tmp.parquet')
-    parquet_file_items = BytesIO(response_items['Body'].read())
-    table_3 = pq.read_table(parquet_file_items)
-    items = table_3.to_pandas()
+    # Загружаем данные с использованием функции
+    category_tree = load_parquet_from_s3(
+        s3_client=s3_client,
+        bucket_name=bucket_name,
+        key=f'{path_data}category_tree_tmp.parquet')
+    
+    events = load_parquet_from_s3(
+        s3_client=s3_client,
+        bucket_name=bucket_name,
+        key=f'{path_data}events_tmp.parquet')
+    
+    items = load_parquet_from_s3(
+        s3_client=s3_client,
+        bucket_name=bucket_name,
+        key=f'{path_data}items_tmp.parquet')
 
     # Заполним отсутствие транзакции 0 - покупка не совершена
-    events['transactionid'] = events['transactionid'].apply(lambda x: 0 if x==None else x).astype('int')
+    events['transactionid'] = events['transactionid'].fillna(0).astype('int')
     # Создадим новый признак - факт совершения покупки
     events['istransaction'] = events['transactionid'].apply(lambda x: 0 if x==0 else 1).astype('int')
     # Добавим в качестве таргета признак - добавления товара в корзину
     events['target'] = events['event'].apply(lambda x: 1 if x=='addtocart' else 0)
     # Преобразуем формат времени
     events['timestamp'] = pd.to_datetime(events['timestamp'], unit='ms').dt.strftime('%Y-%m-%d %H:%M')
-    # Переименуем столбцы в более привычные для рекомендательных систем
-    events = events.rename(columns={'visitorid': 'user_id',
-                                'itemid': 'item_id'})
     
     # Преобразуем дату
     items['timestamp'] = pd.to_datetime(items['timestamp'], unit='ms').dt.strftime('%Y-%m-%d %H:%M')
     # Остортируем датасет по времени и товарам
-    items = items.sort_values(['timestamp', 'itemid']).reset_index(drop=True)
+    items = items.sort_values(['timestamp', 'item_id']).reset_index(drop=True)
     # Удалим дубликаты, оставив только последнюю по времени строку со свойствами
-    items = items.drop_duplicates(['itemid','property','value'], keep='last').reset_index(drop=True)
-    # Переименуем столбец
-    items = items.rename(columns={'itemid': 'item_id'})
+    items = items.drop_duplicates(['item_id','property','value'], keep='last').reset_index(drop=True)
 
     # Проверим, для всех ли товаров из датасета с взаимодействиями есть свойства товаров
     items_list = items['item_id'].unique()
@@ -146,23 +149,26 @@ def transform(**kwargs):
 
     events = events.merge(items_top_properties, on='item_id', how='left')
     # Заполним категорию 0
-    events['categoryid'] = events['categoryid'].fillna('0')
-    # Преобразуем тип данных
-    events['categoryid'] = events['categoryid'].astype('int')
+    events['categoryid'] = events['categoryid'].fillna(0).astype('int')
+
     events = events.merge(category_tree, on='categoryid', how='left')
 
-    events.to_parquet('events_transformed.parquet', index=False)
-    items.to_parquet('items_transformed.parquet', index=False)
-
-    s3_hook.load_file('events_transformed.parquet', 
-                      key=f'{PATH}events_transformed.parquet',
-                       bucket_name=BACKET_NAME, 
-                       replace=True)
+    upload_parquet_to_s3(
+        df=events,
+        file_name='events_transformed',
+        path_data=path_data,
+        bucket_name=bucket_name,
+        s3_hook=s3_hook
+        )
     
-    s3_hook.load_file('items_transformed.parquet', 
-                      key=f'{PATH}items_transformed.parquet',
-                       bucket_name=BACKET_NAME, 
-                       replace=True)
+    upload_parquet_to_s3(
+        df=items,
+        file_name='items_transformed',
+        path_data=path_data,
+        bucket_name=bucket_name,
+        s3_hook=s3_hook
+        )
+
 
 def feature_engineering(**kwargs):
     """
@@ -171,50 +177,96 @@ def feature_engineering(**kwargs):
     s3_hook = S3Hook(aws_conn_id='s3_aws_connection')
     s3_client = s3_hook.get_conn()
 
-    response_events = s3_client.get_object(Bucket=BACKET_NAME, 
-                                    Key=f'{PATH}events_transformed.parquet')
-    # Читаем содержимое объекта
-    parquet_file_events = BytesIO(response_events['Body'].read())
-    # Загружаем Parquet файл в DataFrame
-    table_1 = pq.read_table(parquet_file_events)
-    events = table_1.to_pandas()
+    events = load_parquet_from_s3(
+        s3_client=s3_client,
+        bucket_name=bucket_name,
+        key=f'{path_data}events_transformed.parquet'
+        )
 
     events['timestamp'] =  pd.to_datetime(events['timestamp'])
 
     # Подсчет всех user_id с учетом просмотров и покупок
     events['rating_count'] = events.groupby('item_id')['user_id'].transform('count')
+
     # Отмасштабируем признак, чтобы оценки были в одной шкале
     scaler = MinMaxScaler()
     events['rating'] = scaler.fit_transform(events[['rating_count']])
+
     # Извлекаем день недели и час
     events['day_of_week'] = events['timestamp'].dt.dayofweek  # Получаем день недели
     events['day'] = events['timestamp'].dt.day  # Получаем день в месяце
     events['hour'] = events['timestamp'].dt.hour  # Получаем час
 
-    # Отберем необходимые признаки
-    selected_columns = ['timestamp',
-                    'user_id',
-                    'item_id',
-                    'available',
-                    'categoryid',
-                    'parentid',
-                    'istransaction',
-                    'day_of_week',
-                    'day',
-                    'hour',
-                    'rating',
-                    'target']
-
-    # Создадим итоговый датасет
-    events = events[selected_columns]
-
-    events.to_parquet('events_final.parquet', index=False)
-
-    s3_hook.load_file('events_final.parquet', 
-                      key=f'{PATH}events_final.parquet',
-                       bucket_name=BACKET_NAME, 
-                       replace=True)
+    upload_parquet_to_s3(
+        df=events,
+        file_name='events_final',
+        path_data=path_data,
+        bucket_name=bucket_name,
+        s3_hook=s3_hook
+        )
     
+# Функция split_dataframes была разделена на логические блоки
+def split_train_test(events, test_days=30):
+    """
+    Train test split
+    """
+    events['timestamp'] = pd.to_datetime(events['timestamp'], errors='coerce')
+    split_date = events["timestamp"].max() - pd.Timedelta(days=test_days)
+    train_idx = events["timestamp"] < split_date
+
+    return events[train_idx], events[~train_idx]
+
+def encode_categorical_features(events, 
+                                events_train,
+                                events_test, 
+                                column):
+    """
+    Category features encoding
+    """
+    user_encoder = sklearn.preprocessing.LabelEncoder() 
+    user_encoder.fit(events[column]) 
+
+    events[f"{column}_enc"] = user_encoder.transform(events[column]) 
+    events_train[f"{column}_enc"] = user_encoder.transform(events_train[column]) 
+    events_test[f"{column}_enc"] = user_encoder.transform(events_test[column]) 
+
+    return events, events_train, events_test
+
+def create_candidates_for_train(events_labels, negatives_per_user=1):
+    """
+    Catboost train dataset creation
+    """
+    candidates_to_sample = events_labels.groupby("user_id").filter(lambda x: x["target"].sum() > 0)
+    candidates_for_train = pd.concat([
+        candidates_to_sample.query("target == 1"),
+        candidates_to_sample.query("target == 0") \
+            .groupby("user_id") \
+            .apply(lambda x: x.sample(negatives_per_user, random_state=0))
+    ]).reset_index(drop=True)
+
+    return candidates_for_train
+
+def create_candidates_to_rank(events_train, events_labels, events_test_2):
+    """
+    Ranking dataset creation
+    """
+    events_inference = pd.concat([events_train, events_labels])
+    candidates_to_rank = events_inference[events_inference.user_id.isin(events_test_2.user_id.drop_duplicates())]
+
+    return candidates_to_rank
+
+def add_user_features(df):
+    """
+    Add user features
+    """
+    user_features = df[df['target'] == 0].groupby("user_id").agg(
+        item_id_week=("timestamp", lambda x: (x.max() - x.min()).days / 7),
+        item_viewed=("item_id", "count"),
+        rating_avg=("rating", "mean"),
+        rating_std=("rating", "std")
+    )
+    return df.merge(user_features, on="user_id", how="left").fillna(0)
+
 
 def split_dataframes(**kwargs):
     """
@@ -222,108 +274,55 @@ def split_dataframes(**kwargs):
     """
     ti = kwargs['ti']
 
+    # Загрузка данных
     s3_hook = S3Hook(aws_conn_id='s3_aws_connection')
     s3_client = s3_hook.get_conn()
 
-    response_events = s3_client.get_object(Bucket=BACKET_NAME, 
-                                    Key=f'{PATH}events_final.parquet')
-    parquet_file_events = BytesIO(response_events['Body'].read())
-    table_1 = pq.read_table(parquet_file_events)
-    events = table_1.to_pandas()
+    events = load_parquet_from_s3(
+        s3_client=s3_client,
+        bucket_name=bucket_name,
+        key=f'{path_data}events_final.parquet'
+    )
 
-    response_items = s3_client.get_object(Bucket=BACKET_NAME, 
-                                    Key=f'{PATH}items_transformed.parquet')
-    parquet_file_items = BytesIO(response_items['Body'].read())
-    table_2 = pq.read_table(parquet_file_items)
-    items = table_2.to_pandas()
+    items = load_parquet_from_s3(
+        s3_client=s3_client,
+        bucket_name=bucket_name,
+        key=f'{path_data}items_transformed.parquet'
+    )
 
-    events['timestamp'] = pd.to_datetime(events['timestamp'], errors='coerce')
-    
-    # Зададим точку разбиения
-    train_test_global_time_split_date = events["timestamp"].max() - pd.Timedelta(days=30)
-    
-    # Фильтрация данных на основе условия
-    train_test_global_time_split_idx = events["timestamp"] < train_test_global_time_split_date
-    events_train = events[train_test_global_time_split_idx]
-    events_test = events[~train_test_global_time_split_idx]
+    # Разделение данных на train и test
+    events_train, events_test = split_train_test(events)
 
-    # Перекодируем идентификаторы пользователей в последовательность с 0
-    user_encoder = sklearn.preprocessing.LabelEncoder()
-    user_encoder.fit(events["user_id"])
+    # Перекодируем идентификаторы объектов в последовательность с 0 
+    item_encoder = sklearn.preprocessing.LabelEncoder() 
+    item_encoder.fit(items["item_id"]) 
+    items["item_id_enc"] = item_encoder.transform(items["item_id"]) 
+    events_train["item_id_enc"] = item_encoder.transform(events_train["item_id"]) 
+    events_test["item_id_enc"] = item_encoder.transform(events_test["item_id"]) 
 
-    events["user_id_enc"] = user_encoder.transform(events["user_id"])
-    events_train["user_id_enc"] = user_encoder.transform(events_train["user_id"])
-    events_test["user_id_enc"] = user_encoder.transform(events_test["user_id"])
+    # Далее воспользуемся функцией
+    enc_col = ["user_id", "categoryid", "parentid"]
+    for column in enc_col:
+        events, events_train, events_test = encode_categorical_features(events, 
+                                                                        events_train,
+                                                                        events_test, 
+                                                                        column)
 
-    # Перекодируем идентификаторы объектов в последовательность с 0
-    item_encoder = sklearn.preprocessing.LabelEncoder()
-    item_encoder.fit(items["item_id"])
-
-    items["item_id_enc"] = item_encoder.transform(items["item_id"])
-    events_train["item_id_enc"] = item_encoder.transform(events_train["item_id"])
-    events_test["item_id_enc"] = item_encoder.transform(events_test["item_id"])
-
-    # Перекодируем идентификаторы категории в последовательность с 0
-    category_encoder = sklearn.preprocessing.LabelEncoder()
-    category_encoder.fit(events["categoryid"])
-
-    events["categoryid_enc"] = category_encoder.transform(events["categoryid"])
-    events_train["categoryid_enc"] = category_encoder.transform(events_train["categoryid"])
-    events_test["categoryid_enc"] = category_encoder.transform(events_test["categoryid"])
-
-    # Перекодируем идентификаторы категории в последовательность с 0
-    parent_encoder = sklearn.preprocessing.LabelEncoder()
-    parent_encoder.fit(events["parentid"])
-
-    events["parentid_enc"] = parent_encoder.transform(events["parentid"])
-    events_train["parentid_enc"] = parent_encoder.transform(events_train["parentid"])
-    events_test["parentid_enc"] = parent_encoder.transform(events_test["parentid"])
-
-    # Вычтем из последней даты в датасете несколько дней
+    # Разделение тестовой выборки на labels и test_2
     test_days = events_test["timestamp"].max() - pd.Timedelta(days=3)
-
-    # Задаём точку разбиения
-    split_date_for_labels = test_days
-
-    # Разделим данные
-    split_date_for_labels_idx = events_test["timestamp"] < split_date_for_labels
+    split_date_for_labels_idx = events_test["timestamp"] < test_days
     events_labels = events_test[split_date_for_labels_idx].copy()
     events_test_2 = events_test[~split_date_for_labels_idx].copy()
 
-    # В кандидатах оставляем только тех пользователей, у которых есть хотя бы один положительный таргет
-    candidates_to_sample = events_labels.groupby("user_id").filter(lambda x: x["target"].sum() > 0)
+    # Создание кандидатов для обучения
+    candidates_for_train = create_candidates_for_train(events_labels)
+    candidates_for_train = add_user_features(candidates_for_train)
 
-    # для каждого пользователя оставляем 1 негативный пример
-    negatives_per_user = 1
-    candidates_for_train = pd.concat([
-        candidates_to_sample.query("target == 1"),
-        candidates_to_sample.query("target == 0") \
-            .groupby("user_id") \
-            .apply(lambda x: x.sample(negatives_per_user, random_state=0))
-        ]).reset_index(drop=True)
-    
-    user_features_for_train = events_train[events_train['target']==0].groupby("user_id").agg(
-            item_id_week=("timestamp", lambda x: (x.max()-x.min()).days/7),
-            item_viewed=("item_id", "count"),
-            rating_avg=("rating", "mean"),
-            rating_std=("rating", "std"))
-    
-    candidates_for_train = candidates_for_train.merge(user_features_for_train, on="user_id", how="left").fillna(0)
+    # Создание кандидатов для ранжирования
+    candidates_to_rank = create_candidates_to_rank(events_train, events_labels, events_test_2)
+    candidates_to_rank = add_user_features(candidates_to_rank)
 
-    events_inference = pd.concat([events_train, events_labels])
-
-    # Оставляем только тех пользователей, что есть в тестовой выборке
-    candidates_to_rank = events_inference[events_inference.user_id.isin(events_test_2.user_id.drop_duplicates())]
-
-    # Получим новые признаки
-    user_features_for_ranking = events_inference[events_inference['target']==0].groupby("user_id").agg(
-            item_id_week=("timestamp", lambda x: (x.max()-x.min()).days/7),
-            item_viewed=("item_id", "count"),
-            rating_avg=("rating", "mean"),
-            rating_std=("rating", "std"))
-
-    candidates_to_rank = candidates_to_rank.merge(user_features_for_ranking, on="user_id", how="left").fillna(0) 
-
+    # вместо return отправляем данные передатчику task_instance
     csv_buffer_1 = io.StringIO()
     candidates_to_rank.to_csv(csv_buffer_1, index=False)
     candidates_to_rank_push = csv_buffer_1.getvalue()
@@ -332,7 +331,7 @@ def split_dataframes(**kwargs):
     candidates_for_train.to_csv(csv_buffer_2, index=False)
     candidates_for_train_push = csv_buffer_2.getvalue()
 
-    ti.xcom_push(key='candidates_to_rank', value=candidates_to_rank_push) # вместо return отправляем данные передатчику task_instance
+    ti.xcom_push(key='candidates_to_rank', value=candidates_to_rank_push)
     ti.xcom_push(key='candidates_for_train', value=candidates_for_train_push)
 
 def train_inference_model(**kwargs):
@@ -340,36 +339,15 @@ def train_inference_model(**kwargs):
     """ Train model and inference """
 
     ti = kwargs['ti'] # получение объекта task_instance
-
+    
+   # Десериализуем CSV обратно в DataFrame
     csv_data_1 = ti.xcom_pull(key='candidates_to_rank')
-    # Десериализуем CSV обратно в DataFrame
     candidates_to_rank = pd.read_csv(io.StringIO(csv_data_1))
 
     csv_data_2 = ti.xcom_pull(key='candidates_for_train')
     candidates_for_train = pd.read_csv(io.StringIO(csv_data_2))
     
     s3_hook = S3Hook(aws_conn_id='s3_aws_connection')
-
-    features = ['categoryid_enc',
-                'parentid_enc',
-                'available',
-                'istransaction',
-                'day_of_week',
-                'day',
-                'hour',
-                'rating',
-                'item_id_week',
-                'item_viewed',
-                'rating_avg',
-                'rating_std']
-    
-    cat_features = ['categoryid_enc',
-                'parentid_enc',
-                'available',
-                'istransaction',
-                'day_of_week',
-                'day',
-                'hour']
     
     target = ["target"]
     
@@ -400,7 +378,6 @@ def train_inference_model(**kwargs):
 
     # Для каждого пользователя проставляем rank, начиная с 1 — это максимальный cb_score
     candidates_to_rank = candidates_to_rank.sort_values(["user_id", "cb_score"], ascending=[True, False])
-    candidates_to_rank["rank"] = candidates_to_rank.groupby("user_id").cumcount() + 1
     
     # Отранжируем рекомендации
     candidates_to_rank["rank"] = candidates_to_rank.groupby("user_id").cumcount() + 1
@@ -414,15 +391,15 @@ def train_inference_model(**kwargs):
 
     # Загружаем файл в S3
     s3_hook.load_file("cb_model.pkl", 
-                      key=f'{PATH_MODEL}cb_model.pkl', 
-                      bucket_name=BACKET_NAME, 
+                      key=f'{path_model}cb_model.pkl', 
+                      bucket_name=bucket_name, 
                       replace=True)
-
-
-    recommendations.to_parquet('recommendations.parquet', index=False)
-
-    s3_hook.load_file('recommendations.parquet', 
-                      key=f'{PATH_RECS}recommendations.parquet',
-                       bucket_name=BACKET_NAME, 
-                       replace=True)
+    
+    upload_parquet_to_s3(
+        df=recommendations,
+        file_name='recommendations',
+        path_data=path_data,
+        bucket_name=bucket_name,
+        s3_hook=s3_hook
+        )
 
