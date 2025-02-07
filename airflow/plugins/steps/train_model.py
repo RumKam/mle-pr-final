@@ -18,7 +18,7 @@ config = configparser.ConfigParser()
 config.read('config.ini')
 
 # Получаем значения параметров
-path_data = config['PATHS']['PATH']
+path_data = config['PATHS']['PATH_DATA']
 path_recs = config['PATHS']['PATH_RECS']
 path_model = config['PATHS']['PATH_MODEL']
 

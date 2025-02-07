@@ -177,10 +177,7 @@ old/
 *.csv
 *.cache
 *.ipynb_checkpoints
-*.ipynb
-.ipynb
-main_research.ipynb
-notebooks/main_research.ipynb
+
 
 !test_service.log
 !top_popular.parquet
